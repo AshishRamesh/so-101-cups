@@ -127,9 +127,10 @@ observation contract this script uses).
 | `TypeError: unexpected keyword 'use_degrees'` | that field isn't on `SOFollowerConfig` here | Remove it; then figure out the native unit from preview values and set `CAL` accordingly. |
 | "no status packet" / one arm dead | wrong port, loose/unpowered servo, wrong motor id, bad wrist_roll | Check `ls /dev/ttyACM*`, re-run `lerobot-find-port`, reseat cables/power. |
 | Robot asks to recalibrate | `--robot_id` ≠ the id used at calibration | Use `--robot_id bimanual` (matches `bimanual_{left,right}.json`). |
-| `KeyError: camera 'top_rgb' not in obs` | camera names / indices wrong | List cams (`ls /dev/video*`); set `--cam_index` (top left right order) and the `CAMERAS` names to match how they appear in the dumped keys (top-level cams may be unprefixed, wrist cams prefixed `left_`/`right_`). |
-| Images look blue-tinted / colors off | OpenCV delivers **BGR**, model trained on **RGB** | Convert BGR→RGB when assembling the image (or set the camera's `color_mode=rgb`). |
-| Wrong image size | camera not at 640×480 | Set `CAM_W/CAM_H` and the camera config to 640×480 (matches training). |
+| `RuntimeError: ... failed to set fps=...` / `Failed to open OpenCVCamera` (but raw `cv2.VideoCapture(0)` works) | lerobot's `connect()` sets fps/width/height and asserts the device reports them back **exactly** — you requested a value it can't deliver | Use a supported `--cam-fps` (try 30). If it still complains, fall back to native: `--cam-fps 0 --cam-width 0 --cam-height 0` (skips the checks). Probe native values with the cv2 snippet under [Notes](#notes--defaults-to-change-on-the-robot-box). Camera fps is now independent of `--hz`. |
+| `KeyError: camera 'top_rgb' not in obs` | camera names / indices wrong | List cams (`ls /dev/video*`); set `--cam_index` (top left right order, accepts `0` or `/dev/video0`) and the `CAMERAS` names to match the dumped keys (top-level cams may be unprefixed, wrist cams prefixed `left_`/`right_`). |
+| Images look blue-tinted | double BGR↔RGB conversion | lerobot's `OpenCVCamera` already returns **RGB** (`color_mode` defaults to RGB) — do **not** add your own `cvtColor`. |
+| Wrong image size | camera not at 640×480 | Set `--cam-width/--cam-height` (default 640×480, matches training), or `0` for native (the policy preprocessor resizes anyway). |
 
 #### Stage 3 — motion correctness (`--send`)
 
@@ -156,6 +157,20 @@ Per joint: `radians = sign * scale * real + offset`. Default is a plain `deg→r
 ---
 
 ## Notes / defaults to change on the robot box
-- `--dataset_root` and `--policy_path` default to this dev box's `lehome` paths — repoint them.
+- `--policy_path` defaults to this dev box's `lehome` checkpoint path — repoint it (or pass the HF id). `--dataset_root` is ignored (checkpoint is self-contained).
 - `--cam_index 0 2 4` (top, left, right) and the `CAMERAS` names must match your hardware.
 - `--left_port /dev/ttyACM3 --right_port /dev/ttyACM2` per the verified mapping above.
+
+Probe each camera's native fps/resolution (to pick `--cam-fps/--cam-width/--cam-height`, or just use `0`):
+```bash
+python - <<'PY'
+import cv2
+for i in (0, 2, 4):
+    c = cv2.VideoCapture(i)
+    if c.isOpened():
+        print(f"cam {i}: fps={c.get(cv2.CAP_PROP_FPS)} {int(c.get(3))}x{int(c.get(4))}")
+        c.release()
+    else:
+        print(f"cam {i}: not opened")
+PY
+```

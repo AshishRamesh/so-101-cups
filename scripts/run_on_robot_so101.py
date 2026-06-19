@@ -169,12 +169,26 @@ class Policy:
 # ===========================================================================
 # HARDWARE  (lerobot 0.5.2 bimanual SO-101).  Only imported for real runs.
 # ===========================================================================
+def _cam_index(x):
+    """'0' -> 0 (OpenCV index); '/dev/video0' stays a path string."""
+    s = str(x)
+    return int(s) if s.isdigit() else s
+
+
 def build_robot(args):
     from lerobot.cameras.opencv import OpenCVCameraConfig
     from lerobot.robots.bi_so_follower import BiSOFollower, BiSOFollowerConfig
     from lerobot.robots.so_follower import SOFollowerConfig
 
-    cams = {name: OpenCVCameraConfig(index_or_path=idx, width=CAM_W, height=CAM_H, fps=int(args.hz))
+    # IMPORTANT: camera fps/size are INDEPENDENT of the control rate (--hz).
+    # lerobot's camera connect() sets these on the device and asserts the device
+    # reports them back EXACTLY, else it raises "failed to set fps=...". So request
+    # values the camera actually supports. Pass 0 for any of them to leave it unset
+    # (lerobot then uses the camera's native value and skips that assertion).
+    fps = None if int(args.cam_fps) == 0 else int(args.cam_fps)
+    w = None if int(args.cam_width) == 0 else int(args.cam_width)
+    h = None if int(args.cam_height) == 0 else int(args.cam_height)
+    cams = {name: OpenCVCameraConfig(index_or_path=_cam_index(idx), fps=fps, width=w, height=h)
             for name, idx in zip(CAMERAS.keys(), args.cam_index)}
 
     cfg = BiSOFollowerConfig(
@@ -241,7 +255,11 @@ def main():
     ap.add_argument("--left_port", default="/dev/ttyACM3")
     ap.add_argument("--right_port", default="/dev/ttyACM2")
     ap.add_argument("--cam_index", nargs=3, default=[0, 2, 4],
-                    help="OpenCV indices for top, left, right cameras (in that order)")
+                    help="OpenCV index (0) or path (/dev/video0) for top, left, right cams")
+    ap.add_argument("--cam-fps", type=int, default=30,
+                    help="camera fps (NOT the control rate). 0 = camera native + skip the fps check")
+    ap.add_argument("--cam-width", type=int, default=640, help="camera width px (0 = native)")
+    ap.add_argument("--cam-height", type=int, default=480, help="camera height px (0 = native)")
 
     # safety for --send
     ap.add_argument("--max-step-rad", type=float, default=0.05,
