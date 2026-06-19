@@ -80,13 +80,13 @@ The four root causes of friction:
 # 0) One-time on the robot box:
 #    - install lerobot 0.5.2 with extras (see the bimanual setup guide):
 #        pip install -e .  +  lerobot[feetech] lerobot[dataset]  + opencv
-#    - copy the dataset meta/ (small: json/parquet, no videos) to the robot box
 #    - copy the checkpoint dir, OR:  ./scripts/download_model.sh AshishRamesh/smolvla-4type-fold-test
+#    (NO dataset needed — the checkpoint is self-contained: features in config.json,
+#     normalization stats in the policy_*processor.safetensors.)
 
 # 1) Does the 0.4.3-trained checkpoint load under 0.5.2?  (no hardware)
 ./scripts/run_policy.sh --dryrun --device cpu \
-  --policy_path /path/to/checkpoints/last/pretrained_model \
-  --dataset_root /path/to/four_types_merged
+  --policy_path /path/to/checkpoints/last/pretrained_model
 
 # 2) Real cameras + joints -> inference -> PRINTS the action + what it WOULD send.
 #    Nothing moves. Prints the raw obs keys so you can fix the mappings.
@@ -110,8 +110,8 @@ Editable knobs are constants at the top of
 | `ImportError: lerobot.processor.core` (or `make_pre_post_processors`, `PreTrainedConfig`) | API path moved between 0.4.3 and 0.5.2 | `python -c "import lerobot.processor as p; print(dir(p))"` and adjust the imports in the `Policy` class. |
 | Config load error — unknown field / unexpected keyword / unknown policy type | `config.json` schema differs between 0.4.3 and 0.5.2 | Try loading in the **lehome 0.4.3 env** to confirm the checkpoint is fine; if so, either (a) hand-edit `config.json` to the 0.5.2 schema, or (b) fall back to the **HTTP policy-server bridge** (run the policy in 0.4.3, robot client in 0.5.2). |
 | Processor/normalizer file errors | 0.5.2 expects a different processor layout than the saved `policy_*_processor.*` files | Same fallback as above — load/serve in 0.4.3. |
-| Hangs/downloads at load, or offline failure | SmolVLA pulls its VLM base weights (e.g. `lerobot/smolvla_base`) | Pre-download on a networked machine (`hf download lerobot/smolvla_base`), or set `HF_HOME`/`HF_HUB_OFFLINE=1` with a warm cache. |
-| `FileNotFoundError` on `meta/info.json` | dataset `meta/` not on the robot box | Copy `four_types_merged/meta/` over and point `--dataset_root` at it. |
+| Hangs/downloads at load, or offline failure | SmolVLA pulls its VLM base + tokenizer (`lerobot/smolvla_base`, `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`) | Pre-download on a networked machine (`hf download ...`), or set `HF_HOME`/`HF_HUB_OFFLINE=1` with a warm cache. |
+| `FileNotFoundError: meta/info.json` / `404 datasets/lehome` | **(fixed)** old code loaded dataset metadata via `make_policy(ds_meta=...)` | Already resolved — the loader now bypasses `make_policy` and reads features from `config.json` + stats from the processor safetensors. No dataset / `--dataset_root` needed. |
 | CUDA OOM | GPU too small for the model + autocast | `--device cpu` for dryrun; for real runs use a smaller batch / fp16, or a bigger GPU. |
 
 If Stage 1 cannot be made to pass under 0.5.2, **stop and switch to the HTTP policy-server

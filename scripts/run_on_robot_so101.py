@@ -99,30 +99,42 @@ def clamp_rad(name: str, rad_val: float) -> float:
 # POLICY  (faithful port of lehome's LeRobotPolicy onto the lerobot 0.5.x API)
 # ===========================================================================
 class Policy:
-    def __init__(self, policy_path, dataset_root, task, device):
+    def __init__(self, policy_path, task, device):
         import torch
         from lerobot.configs.policies import PreTrainedConfig
-        from lerobot.policies.factory import make_policy, make_pre_post_processors
-        from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+        from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
         self.torch = torch
         self.device = torch.device(device)
         self.task = task
 
-        meta = LeRobotDatasetMetadata(repo_id="lehome", root=dataset_root)
+        # The checkpoint is SELF-CONTAINED — no dataset metadata required:
+        #   * config.json carries input_features / output_features (shapes)
+        #   * policy_*processor.safetensors carry the normalization stats
+        # The original lehome wrapper only loaded a dataset because make_policy()
+        # *requires* ds_meta to set features. We already have them in cfg, so we
+        # bypass make_policy() and load the policy class straight from the dir.
         cfg = PreTrainedConfig.from_pretrained(policy_path, cli_overrides={})
         cfg.pretrained_path = policy_path
-
         self.input_features = set(cfg.input_features.keys()) if hasattr(cfg, "input_features") else None
-        self.policy = make_policy(cfg, ds_meta=meta)
+
+        policy_cls = get_policy_class(cfg.type)
+        self.policy = policy_cls.from_pretrained(policy_path, config=cfg)
         self.policy.eval()
         self.policy.to(self.device)
+
+        # pretrained_path makes the processors load their stats from the saved
+        # *_processor.safetensors — again, no dataset needed.
         self.pre, self.post = make_pre_post_processors(
             policy_cfg=cfg,
             pretrained_path=policy_path,
             preprocessor_overrides={"device_processor": {"device": str(self.device)}},
         )
         self.action_dim = 12
+        try:
+            self.action_dim = int(cfg.output_features["action"].shape[0])
+        except Exception:
+            pass
 
     def reset(self):
         self.policy.reset()
@@ -218,9 +230,8 @@ def main():
     ap.add_argument("--policy_path",
                     default="/home/ashish/ashish/lehome/lehome chg/outputs/train/smolvla_4type/checkpoints/last/pretrained_model",
                     help="local checkpoint dir OR a HF id like AshishRamesh/smolvla-4type-fold-test")
-    ap.add_argument("--dataset_root",
-                    default="/home/ashish/ashish/lehome/lehome chg/Datasets/example/four_types_merged",
-                    help="dataset dir whose meta/ describes the features (copy meta/ to the robot box)")
+    ap.add_argument("--dataset_root", default=None,
+                    help="(deprecated / ignored) the checkpoint is self-contained; no dataset needed")
     ap.add_argument("--task", default="fold the garment on the table")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--hz", type=float, default=10.0, help="control rate (start LOW for --send)")
@@ -243,7 +254,7 @@ def main():
 
     print(f"[load] policy_path={args.policy_path}")
     print(f"[load] device={args.device}  task={args.task!r}")
-    policy = Policy(args.policy_path, args.dataset_root, args.task, args.device)
+    policy = Policy(args.policy_path, args.task, args.device)
     policy.reset()
     print(f"[load] OK — action_dim={policy.action_dim}")
 
