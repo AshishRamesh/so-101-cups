@@ -140,7 +140,7 @@ class Policy:
         self.policy.reset()
 
     def select_action(self, obs: dict) -> np.ndarray:
-        from lerobot.processor.core import TransitionKey
+        from lerobot.processor import TransitionKey
         torch = self.torch
         if self.input_features:
             obs = {k: v for k, v in obs.items()
