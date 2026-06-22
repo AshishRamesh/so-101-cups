@@ -298,12 +298,19 @@ def main():
         print("[hw] connected. Reading one observation to show real keys:\n")
         _ = read_observation(robot, raw_dump=True)
 
+        prev_real = None
         if args.send:
             print("\n*** --send will MOVE the arms. Preview first if you haven't. ***")
             if input("Type 'MOVE' to proceed: ").strip() != "MOVE":
                 print("Aborted (no confirmation).")
                 return
-            prev_real = None  # for per-step rate limiting
+            # Seed the rate limiter with the arm's CURRENT real positions so the
+            # FIRST commanded step eases from where the arm actually is — no lunge.
+            raw0 = robot.get_observation()
+            prev_real = {}
+            for name in JOINT_NAMES:
+                k = POS_KEY.format(side=name.split("_", 1)[0], motor=name.split("_", 1)[1])
+                prev_real[k] = float(raw0[k])
 
         dt = 1.0 / args.hz
         n = 0
@@ -315,12 +322,10 @@ def main():
             targets = to_motor_targets(action)                  # clamped, real units
 
             if args.send:
-                if prev_real is not None:                       # rate limit per joint
-                    for i, name in enumerate(JOINT_NAMES):
-                        k = POS_KEY.format(side=name.split("_", 1)[0], motor=name.split("_", 1)[1])
-                        step_lim = args.max_step_rad / (CAL[name]["sign"] * CAL[name]["scale"])
-                        targets[k] = float(np.clip(targets[k], prev_real[k] - abs(step_lim),
-                                                   prev_real[k] + abs(step_lim)))
+                for name in JOINT_NAMES:                        # rate limit per joint
+                    k = POS_KEY.format(side=name.split("_", 1)[0], motor=name.split("_", 1)[1])
+                    step_lim = abs(args.max_step_rad / (CAL[name]["sign"] * CAL[name]["scale"]))
+                    targets[k] = float(np.clip(targets[k], prev_real[k] - step_lim, prev_real[k] + step_lim))
                 robot.send_action(targets)
                 prev_real = targets
             else:

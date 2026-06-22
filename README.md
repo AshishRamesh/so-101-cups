@@ -15,7 +15,7 @@ the real robot.
 | Script | What it does |
 |---|---|
 | [`scripts/config.sh`](scripts/config.sh) | Shared config (ports, venv, IDs) + helpers: `say()` (TTS), `activate_venv`, pre-flight checks. Sourced by the others. |
-| [`scripts/record_episodes.sh`](scripts/record_episodes.sh) | Record teleop episodes. Native arrow keys: **→** save+next, **←** drop+re-record, **Esc** stop. Voice cues. |
+| [`scripts/record_episodes.sh`](scripts/record_episodes.sh) | Record teleop episodes. Native arrow keys: **→** save+next, **←** drop+re-record, **Esc** stop. Voice cues + **live Rerun viewer** (3 cam feeds + joint states via `--display_data`); 3 cameras recorded into the dataset. `--no-display` / `--no-cameras` to disable. |
 | [`scripts/push_dataset.sh`](scripts/push_dataset.sh) | Find a locally recorded dataset, ask which HF repo to push to, upload it. |
 | [`scripts/download_model.sh`](scripts/download_model.sh) | Pull a trained policy from HF into the local cache (skips if cached). |
 | [`scripts/run_on_robot_so101.py`](scripts/run_on_robot_so101.py) | Run a policy on the SO-101 (lerobot 0.5.2). Stages: `--dryrun` → `--preview` → `--send`. |
