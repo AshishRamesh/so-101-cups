@@ -15,7 +15,7 @@ the real robot.
 | Script | What it does |
 |---|---|
 | [`scripts/config.sh`](scripts/config.sh) | Shared config (ports, venv, IDs) + helpers: `say()` (TTS), `activate_venv`, pre-flight checks. Sourced by the others. |
-| [`scripts/record_episodes.sh`](scripts/record_episodes.sh) | Record teleop episodes. Native arrow keys: **→** save+next, **←** drop+re-record, **Esc** stop. Voice cues + **live Rerun viewer** (3 cam feeds + joint states via `--display_data`); 3 cameras recorded into the dataset. `--no-display` / `--no-cameras` to disable. |
+| [`scripts/record_episodes.sh`](scripts/record_episodes.sh) | Record teleop episodes (voice cues + live Rerun viewer + 3 cameras). See [Recording episodes](#recording-episodes). |
 | [`scripts/push_dataset.sh`](scripts/push_dataset.sh) | Find a locally recorded dataset, ask which HF repo to push to, upload it. |
 | [`scripts/download_model.sh`](scripts/download_model.sh) | Pull a trained policy from HF into the local cache (skips if cached). |
 | [`scripts/run_on_robot_so101.py`](scripts/run_on_robot_so101.py) | Run a policy on the SO-101 (lerobot 0.5.2). Stages: `--dryrun` → `--preview` → `--send`. |
@@ -44,8 +44,74 @@ source ~/lerobot_ws/lerobot312/bin/activate
 ./scripts/push_dataset.sh
 ```
 
-> **Wayland breaks the arrow keys** during recording (they emit `^[[C`/`^[[D`). Check with
-> `echo $XDG_SESSION_TYPE`; if `wayland`, log in on **Ubuntu on Xorg** or use timed episodes.
+---
+
+## Recording episodes
+
+[`scripts/record_episodes.sh`](scripts/record_episodes.sh) teleoperates the bimanual SO-101 and
+records episodes into a LeRobot dataset, with **voice cues** and a **live Rerun viewer** (3 camera
+feeds + joint plots). The 3 cameras are also written into the dataset as
+`observation.images.top_rgb / left_rgb / right_rgb`.
+
+```bash
+./scripts/record_episodes.sh -n 30 -t "pick up the cup"
+```
+
+### Controls during a session (native lerobot keys)
+- **→ right arrow** — save the current episode, start the next
+- **← left arrow** — drop the current episode and re-record it
+- **Esc** — stop the session (then push to hub, unless `--no-push`)
+
+> Arrow keys are **X11 only**. Under Wayland they emit `^[[C`/`^[[D` and don't work — log in on
+> **Ubuntu on Xorg**, or rely on the episode timer. Check with `echo $XDG_SESSION_TYPE`.
+
+### Parameters
+
+| Flag | Env var | Default | Meaning |
+|---|---|---|---|
+| `-n, --episodes` | `NUM_EPISODES` | `30` | number of episodes to record |
+| `-t, --task` | `TASK` | `pick up the cup` | task text stored on every frame (`dataset.single_task`) |
+| `-r, --repo` | `REPO_ID` | `<hf-user>/so101_cups` | HF dataset repo id (auto-filled from `hf auth whoami`) |
+| `-e, --episode-time` | `EPISODE_TIME_S` | `30` | seconds recorded per episode (or until → / ←) |
+| `-s, --reset-time` | `RESET_TIME_S` | `5` | seconds **between** episodes to reset the scene (not recorded) |
+| `--no-push` | `PUSH_TO_HUB=false` | push on | keep the dataset local; upload later with `push_dataset.sh` |
+| `--no-voice` | `VOICE_ENABLED=0` | voice on | disable the spoken cues |
+| `--no-display` | `DISPLAY_DATA=false` | viewer on | skip the Rerun viewer (still records) |
+| `--no-cameras` | `USE_CAMERAS=0` | cams on | record joints only, no images |
+| `--cam-index T L R` | `CAM_TOP`/`CAM_LEFT`/`CAM_RIGHT` | `0 2 4` | OpenCV index or `/dev/videoN` for top, left-wrist, right-wrist cams |
+| `--cam-fps N` | `CAM_FPS` | `30` | camera fps — must be a rate the cameras actually support |
+| — | `CAM_W` / `CAM_H` | `640` / `480` | camera resolution |
+
+Flags override env vars; both override the defaults. `-h/--help` prints the same.
+
+### How the reset window works
+After each episode, teleop stays **live** for `--reset-time` seconds with **nothing recorded** —
+your window to physically reset the scene (replace the cup, reposition objects/arms). It's manual
+(real robot, no auto-reset). Press **→** to end the reset early and start the next episode; bump
+`-s` if 5s is too short.
+
+### Examples
+```bash
+./scripts/record_episodes.sh                           # 30 eps, cams + viewer, push to hub
+./scripts/record_episodes.sh -n 50 -t "stack the cups" -s 15
+./scripts/record_episodes.sh --cam-index 0 2 4 --cam-fps 30
+./scripts/record_episodes.sh --no-display --no-push     # no viewer, keep dataset local
+REPO_ID=me/so101_demo ./scripts/record_episodes.sh
+```
+
+### Shirt-folding run
+Record 50 shirt-folding episodes (15s reset) to `AshishRamesh/shirt-fold`. Cameras, voice,
+`--display_data`, and the Rerun viewer are all ON by default, so no extra flags are needed:
+
+```bash
+./scripts/record_episodes.sh -n 50 -t "fold the shirt" -s 15 -r "AshishRamesh/shirt-fold"
+```
+
+### Requirements / gotchas
+- Run inside the venv: `source ~/lerobot_ws/lerobot312/bin/activate`.
+- The Rerun viewer needs `rerun-sdk` (ships with lerobot); otherwise `pip install rerun-sdk`, or use `--no-display`.
+- `--cam-fps` must be a rate the camera supports, or `connect()` fails with `failed to set fps=...`. Probe with the cv2 snippet under [Notes](#notes--defaults-to-change-on-the-robot-box).
+- Recording requires the leader **and** follower arms connected + calibrated (`bimanual` id).
 
 ---
 
@@ -70,7 +136,7 @@ The four root causes of friction:
    (zeros, signs, ranges from sim). The real arm uses LeRobot's calibrated units. A per-joint
    `scale + offset + sign` map (`CAL` in the script) bridges them and **must be tuned**.
 3. **Cameras.** The model needs 3 RGB streams named `top_rgb`, `left_rgb`, `right_rgb` at
-   640×480. Indices, names, color order, and resolution all have to line up.
+   640×480. Indices, names, and resolution all have to line up.
 4. **Sim-to-real gap.** Even with everything wired correctly, a sim-trained policy may behave
    poorly on real hardware (different visuals/dynamics). Expect to need on-robot fine-tuning.
 
@@ -96,51 +162,6 @@ The four root causes of friction:
 ./scripts/run_policy.sh --send --hz 10 --max-step-rad 0.05
 ```
 
-### Troubleshooting — symptom → cause → fix
-
-Editable knobs are constants at the top of
-[`run_on_robot_so101.py`](scripts/run_on_robot_so101.py): `POS_KEY`, `CAMERAS`, `CAM_W/CAM_H`,
-`CAL`, `ABS_LIMITS_RAD`.
-
-#### Stage 1 — model loading (`--dryrun`)
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `ModuleNotFoundError: lerobot` / wrong version | venv not active / wrong install | `source ~/lerobot_ws/lerobot312/bin/activate`; verify `python -c "import lerobot;print(lerobot.__version__)"` → `0.5.2`. |
-| `ImportError: lerobot.processor.core` (or `make_pre_post_processors`, `PreTrainedConfig`) | API path moved between 0.4.3 and 0.5.2 | `python -c "import lerobot.processor as p; print(dir(p))"` and adjust the imports in the `Policy` class. |
-| Config load error — unknown field / unexpected keyword / unknown policy type | `config.json` schema differs between 0.4.3 and 0.5.2 | Try loading in the **lehome 0.4.3 env** to confirm the checkpoint is fine; if so, either (a) hand-edit `config.json` to the 0.5.2 schema, or (b) fall back to the **HTTP policy-server bridge** (run the policy in 0.4.3, robot client in 0.5.2). |
-| Processor/normalizer file errors | 0.5.2 expects a different processor layout than the saved `policy_*_processor.*` files | Same fallback as above — load/serve in 0.4.3. |
-| Hangs/downloads at load, or offline failure | SmolVLA pulls its VLM base + tokenizer (`lerobot/smolvla_base`, `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`) | Pre-download on a networked machine (`hf download ...`), or set `HF_HOME`/`HF_HUB_OFFLINE=1` with a warm cache. |
-| `FileNotFoundError: meta/info.json` / `404 datasets/lehome` | **(fixed)** old code loaded dataset metadata via `make_policy(ds_meta=...)` | Already resolved — the loader now bypasses `make_policy` and reads features from `config.json` + stats from the processor safetensors. No dataset / `--dataset_root` needed. |
-| CUDA OOM | GPU too small for the model + autocast | `--device cpu` for dryrun; for real runs use a smaller batch / fp16, or a bigger GPU. |
-
-If Stage 1 cannot be made to pass under 0.5.2, **stop and switch to the HTTP policy-server
-bridge** — that decouples the versions cleanly (`lehome/dummy_docker_policy/` already defines the
-observation contract this script uses).
-
-#### Stage 2 — observation wiring (`--preview`)
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `KeyError: obs key 'left_shoulder_pan.pos' not found` (prints real keys) | `POS_KEY` template doesn't match your build | Set `POS_KEY` to the real format shown (e.g. drop `.pos`, or different motor names). |
-| `ImportError: BiSOFollower / SOFollowerConfig / OpenCVCameraConfig` | class/module names differ in your 0.5.2 | `python -c "import lerobot.robots as r; print(dir(r))"`; update `build_robot()`. |
-| `TypeError: unexpected keyword 'use_degrees'` | that field isn't on `SOFollowerConfig` here | Remove it; then figure out the native unit from preview values and set `CAL` accordingly. |
-| "no status packet" / one arm dead | wrong port, loose/unpowered servo, wrong motor id, bad wrist_roll | Check `ls /dev/ttyACM*`, re-run `lerobot-find-port`, reseat cables/power. |
-| Robot asks to recalibrate | `--robot_id` ≠ the id used at calibration | Use `--robot_id bimanual` (matches `bimanual_{left,right}.json`). |
-| `RuntimeError: ... failed to set fps=...` / `Failed to open OpenCVCamera` (but raw `cv2.VideoCapture(0)` works) | lerobot's `connect()` sets fps/width/height and asserts the device reports them back **exactly** — you requested a value it can't deliver | Use a supported `--cam-fps` (try 30). If it still complains, fall back to native: `--cam-fps 0 --cam-width 0 --cam-height 0` (skips the checks). Probe native values with the cv2 snippet under [Notes](#notes--defaults-to-change-on-the-robot-box). Camera fps is now independent of `--hz`. |
-| `KeyError: camera 'top_rgb' not in obs` | camera names / indices wrong | List cams (`ls /dev/video*`); set `--cam_index` (top left right order, accepts `0` or `/dev/video0`) and the `CAMERAS` names to match the dumped keys (top-level cams may be unprefixed, wrist cams prefixed `left_`/`right_`). |
-| Images look blue-tinted | double BGR↔RGB conversion | lerobot's `OpenCVCamera` already returns **RGB** (`color_mode` defaults to RGB) — do **not** add your own `cvtColor`. |
-| Wrong image size | camera not at 640×480 | Set `--cam-width/--cam-height` (default 640×480, matches training), or `0` for native (the policy preprocessor resizes anyway). |
-
-#### Stage 3 — motion correctness (`--send`)
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Arms jerk / fight / drive into limits | `CAL` units/offset/sign wrong → policy fed garbage state | Tune `CAL` per joint (procedure below). `ABS_LIMITS_RAD` + `--max-step-rad` keep this safe meanwhile. |
-| Gripper behaves wildly | gripper isn't simple deg→rad (often a 0–100 range) | Give `left_gripper`/`right_gripper` their own `CAL` (`scale`/`offset`) from preview. |
-| Motion is sluggish / unstable | control rate far from the 30 fps training rate | Raise `--hz` toward 30 once safe; SmolVLA manages its own action queue (don't forget `policy.reset()` per episode — the script does this at start). |
-| Everything wired right but the task fails | sim-to-real distribution gap (visuals/dynamics) | Collect a small real dataset and **fine-tune** the policy on it; verify camera viewpoints roughly match the sim cameras. |
-
 ### Tuning the sim↔real calibration (`CAL`)
 
 Per joint: `radians = sign * scale * real + offset`. Default is a plain `deg→rad` guess
@@ -150,7 +171,7 @@ Per joint: `radians = sign * scale * real + offset`. Default is a plain `deg→r
 2. By hand, move each joint to two known poses (e.g. a sim-defined "home" and a 90° bend) and
    read the real values the robot reports.
 3. Solve `scale`/`offset` so the real readings map onto the model's radian frame; flip `sign`
-   if the joint moves the opposite way. Set these in `CAL`.
+   if the joint moves the opposite way. Set these in `CAL` (top of `run_on_robot_so101.py`).
 4. Re-preview until the policy's input state (radians) is sane for a known pose, **then** try
    `--send` at low `--hz` and small `--max-step-rad`.
 
